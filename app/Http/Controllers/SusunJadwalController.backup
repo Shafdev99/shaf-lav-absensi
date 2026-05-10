@@ -1,0 +1,302 @@
+ foreach ($hariList as $hari) {
+
+            foreach ($sesiList as $sesi) {
+                if ($sesi->hari_id != $hari->id) {
+                    continue; // Lewati sesi yang tidak sesuai dengan hari saat ini
+                }
+
+                $daySessions = $sesiList->where('hari_id', $hari->id)->sortBy('jam_mulai')->values();
+
+                foreach ($kelasList as $kelas) {
+                    $kelasLessonCount = SusunJadwal::where('kelas_id', $kelas->id)->count();
+                    $kelasMaxJam = $kelas->jumlah_jam ?? null;
+
+                    if ($kelasMaxJam === null || $kelasLessonCount >= $kelasMaxJam) {
+                        continue; // Kuota jam pelajaran kelas sudah terpenuhi atau belum ada data jumlah_jam
+                    }
+
+                    $previousSessionIndex = $daySessions->search(function ($item) use ($sesi) {
+                        return $item->id == $sesi->id;
+                    });
+                    $previousSession = null;
+                    if ($previousSessionIndex !== false && $previousSessionIndex > 0) {
+                        $previousSession = $daySessions[$previousSessionIndex - 1];
+                    }
+
+                    if ($previousSession) {
+                        $previousJadwal = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $previousSession->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->first();
+
+                        if ($previousJadwal) {
+                            $previousGuruPengampu = GuruPengampu::with('mapel')->find($previousJadwal->guru_pengampu_id);
+
+                            if ($previousGuruPengampu) {
+                                $cekPenugasanLama = PenugasanKelas::where('guru_pengampu_id', $previousGuruPengampu->id)
+                                    ->where('kelas_id', $kelas->id)
+                                    ->first();
+
+                                $guruLessonCountLama = SusunJadwal::where('guru_pengampu_id', $previousGuruPengampu->id)->count();
+                                $guruMaxJamLama = $previousGuruPengampu->kuota_jam ?? $previousGuruPengampu->mapel->kuota_jam ?? $previousGuruPengampu->mapel->jumlah_jam_pelajaran ?? null;
+                                $guruKelasLessonCountLama = SusunJadwal::where('guru_pengampu_id', $previousGuruPengampu->id)
+                                    ->where('kelas_id', $kelas->id)
+                                    ->count();
+                                $guruKelasMaxJamLama = $cekPenugasanLama->kuota_jam_per_kelas ?? null;
+
+                                $bentrokLama = SusunJadwal::where('hari_id', $hari->id)
+                                    ->where('sesi_id', $sesi->id)
+                                    ->where('guru_pengampu_id', $previousGuruPengampu->id)
+                                    ->exists();
+
+                                if ($cekPenugasanLama &&
+                                    ($guruMaxJamLama === null || $guruLessonCountLama < $guruMaxJamLama) &&
+                                    ($guruKelasMaxJamLama === null || $guruKelasLessonCountLama < $guruKelasMaxJamLama) &&
+                                    !$bentrokLama
+                                ) {
+                                    SusunJadwal::create([
+                                        'hari_id' => $hari->id,
+                                        'sesi_id' => $sesi->id,
+                                        'kelas_id' => $kelas->id,
+                                        'guru_pengampu_id' => $previousGuruPengampu->id,
+                                    ]);
+
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    $guruPengampuShuffled = $guruPengampuList->shuffle();
+
+                    foreach ($guruPengampuShuffled as $guruPengampu) {
+                        $cekPenugasan = PenugasanKelas::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->first();
+
+                        if (!$cekPenugasan) {
+                            continue; // Lewati guru yang tidak mengajar kelas ini
+                        }
+
+                        $guruLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)->count();
+                        $guruMaxJam = $guruPengampu->kuota_jam ?? $guruPengampu->mapel->kuota_jam ?? $guruPengampu->mapel->jumlah_jam_pelajaran ?? null;
+
+                        if ($guruMaxJam !== null && $guruLessonCount >= $guruMaxJam) {
+                            continue; // Kuota jam mengajar guru pengampu sudah tercapai
+                        }
+
+                        // Cek jadwal tersedia untuk kelas, hari, dan sesi saat ini setelah guru sudah terverifikasi
+                        $jadwalTersedia = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->doesntExist();
+
+                        if (!$jadwalTersedia) {
+                            break; // Jadwal sudah tersedia untuk kelas ini, tidak perlu mencari guru lain
+                        }
+
+                        // Validasi: cek apakah guru sudah mengajar di jam yang sama
+                        $bentrok = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('guru_pengampu_id', $guruPengampu->id)
+                            ->first();
+
+                        if ($bentrok) {
+                            continue; // Lewati guru yang bentrok jadwal
+                        }
+
+                        // Validasi: cek kuota jam mengajar guru per kelas (jika ada kelebihan, maka dipaksa split)
+                        $guruKelasLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->count();
+                        $guruKelasMaxJam = $cekPenugasan->kuota_jam_per_kelas ?? null;
+
+                        if ($guruKelasMaxJam !== null && $guruKelasLessonCount >= $guruKelasMaxJam) {
+                            continue; // Kuota jam mengajar guru per kelas sudah tercapai
+                        }
+
+                        // Input data hanya setelah semua pengecekan lolos
+                        SusunJadwal::create([
+                            'hari_id' => $hari->id,
+                            'sesi_id' => $sesi->id,
+                            'kelas_id' => $kelas->id,
+                            'guru_pengampu_id' => $guruPengampu->id,
+                        ]);
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        
+ foreach ($hariList as $hari) {
+
+            foreach ($sesiList as $sesi) {
+                if ($sesi->hari_id != $hari->id) {
+                    continue; // Lewati sesi yang tidak sesuai dengan hari saat ini
+                }
+
+                foreach ($kelasList as $kelas) {
+                    $kelasLessonCount = SusunJadwal::where('kelas_id', $kelas->id)->count();
+                    $kelasMaxJam = $kelas->jumlah_jam ?? null;
+
+                    if ($kelasMaxJam === null || $kelasLessonCount >= $kelasMaxJam) {
+                        continue; // Kuota jam pelajaran kelas sudah terpenuhi atau belum ada data jumlah_jam
+                    }
+
+                    $guruPengampuShuffled = $guruPengampuList->shuffle();
+
+                    foreach ($guruPengampuShuffled as $guruPengampu) {
+                        $cekPenugasan = PenugasanKelas::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->first();
+
+                        if (!$cekPenugasan) {
+                            continue; // Lewati guru yang tidak mengajar kelas ini
+                        }
+
+                        $guruLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)->count();
+                        $guruMaxJam = $guruPengampu->kuota_jam ?? $guruPengampu->mapel->kuota_jam ?? $guruPengampu->mapel->jumlah_jam_pelajaran ?? null;
+
+                        if ($guruMaxJam !== null && $guruLessonCount >= $guruMaxJam) {
+                            continue; // Kuota jam mengajar guru pengampu sudah tercapai
+                        }
+
+                        // Cek jadwal tersedia untuk kelas, hari, dan sesi saat ini setelah guru sudah terverifikasi
+                        $jadwalTersedia = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->doesntExist();
+
+                        if (!$jadwalTersedia) {
+                            break; // Jadwal sudah tersedia untuk kelas ini, tidak perlu mencari guru lain
+                        }
+
+                        // Validasi: cek apakah guru sudah mengajar di jam yang sama
+                        $bentrok = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('guru_pengampu_id', $guruPengampu->id)
+                            ->first();
+
+                        if ($bentrok) {
+                            continue; // Lewati guru yang bentrok jadwal
+                        }
+
+                        // Validasi: cek kuota jam mengajar guru per kelas (jika ada kelebihan, maka dipaksa split)
+                        $guruKelasLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->count();
+                        $guruKelasMaxJam = $cekPenugasan->kuota_jam_per_kelas ?? null;
+
+                        if ($guruKelasMaxJam !== null && $guruKelasLessonCount >= $guruKelasMaxJam) {
+                            continue; // Kuota jam mengajar guru per kelas sudah tercapai
+                        }
+
+                        // Input data hanya setelah semua pengecekan lolos
+                        SusunJadwal::create([
+                            'hari_id' => $hari->id,
+                            'sesi_id' => $sesi->id,
+                            'kelas_id' => $kelas->id,
+                            'guru_pengampu_id' => $guruPengampu->id,
+                        ]);
+
+                        break;
+                    }
+                }
+            }
+        }
+
+
+public function prosesSusunJadwal()
+    {
+        // Ambil semua data yang diperlukan
+        $hariList = Hari::orderByRaw("CASE nama_hari WHEN 'Senin' THEN 1 WHEN 'Selasa' THEN 2 WHEN 'Rabu' THEN 3 WHEN 'Kamis' THEN 4 WHEN 'Jumat' THEN 5 WHEN 'Sabtu' THEN 6 WHEN 'Minggu' THEN 7 ELSE 8 END, nama_hari ASC")->get();
+        $kelasList = Kelas::tampilKelas()->get();
+        $sesiList = SesiPelajaran::get()->makeHidden(['created_at', 'updated_at']);
+        $guruPengampuList = GuruPengampu::with(['guru', 'mapel'])->get(); // Daftar guru pengampu, akan diacak ulang per kelas
+
+        // Hapus jadwal lama jika diperlukan
+        SusunJadwal::truncate();
+
+        // Debug: Tampilkan daftar guru pengampu yang sudah diacak
+        // Proses penyusunan jadwal
+        foreach ($hariList as $hari) {
+
+            foreach ($sesiList as $sesi) {
+                if ($sesi->hari_id != $hari->id) {
+                    continue; // Lewati sesi yang tidak sesuai dengan hari saat ini
+                }
+
+                foreach ($kelasList as $kelas) {
+                    $kelasLessonCount = SusunJadwal::where('kelas_id', $kelas->id)->count();
+                    $kelasMaxJam = $kelas->jumlah_jam ?? null;
+
+                    if ($kelasMaxJam === null || $kelasLessonCount >= $kelasMaxJam) {
+                        continue; // Kuota jam pelajaran kelas sudah terpenuhi atau belum ada data jumlah_jam
+                    }
+
+                    $guruPengampuShuffled = $guruPengampuList->shuffle();
+
+                    foreach ($guruPengampuShuffled as $guruPengampu) {
+                        $cekPenugasan = PenugasanKelas::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->first();
+
+                        if (!$cekPenugasan) {
+                            continue; // Lewati guru yang tidak mengajar kelas ini
+                        }
+
+                        $guruLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)->count();
+                        $guruMaxJam = $guruPengampu->kuota_jam ?? $guruPengampu->mapel->kuota_jam ?? $guruPengampu->mapel->jumlah_jam_pelajaran ?? null;
+
+                        if ($guruMaxJam !== null && $guruLessonCount >= $guruMaxJam) {
+                            continue; // Kuota jam mengajar guru pengampu sudah tercapai
+                        }
+
+                        // Cek jadwal tersedia untuk kelas, hari, dan sesi saat ini setelah guru sudah terverifikasi
+                        $jadwalTersedia = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->doesntExist();
+
+                        if (!$jadwalTersedia) {
+                            break; // Jadwal sudah tersedia untuk kelas ini, tidak perlu mencari guru lain
+                        }
+
+                        // Validasi: cek apakah guru sudah mengajar di jam yang sama
+                        $bentrok = SusunJadwal::where('hari_id', $hari->id)
+                            ->where('sesi_id', $sesi->id)
+                            ->where('guru_pengampu_id', $guruPengampu->id)
+                            ->first();
+
+                        if ($bentrok) {
+                            continue; // Lewati guru yang bentrok jadwal
+                        }
+
+                        // Validasi: cek kuota jam mengajar guru per kelas (jika ada kelebihan, maka dipaksa split)
+                        $guruKelasLessonCount = SusunJadwal::where('guru_pengampu_id', $guruPengampu->id)
+                            ->where('kelas_id', $kelas->id)
+                            ->count();
+                        $guruKelasMaxJam = $cekPenugasan->kuota_jam_per_kelas ?? null;
+
+                        if ($guruKelasMaxJam !== null && $guruKelasLessonCount >= $guruKelasMaxJam) {
+                            continue; // Kuota jam mengajar guru per kelas sudah tercapai
+                        }
+
+                        // Input data hanya setelah semua pengecekan lolos
+                        SusunJadwal::create([
+                            'hari_id' => $hari->id,
+                            'sesi_id' => $sesi->id,
+                            'kelas_id' => $kelas->id,
+                            'guru_pengampu_id' => $guruPengampu->id,
+                        ]);
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        return redirect()->route('susun.jadwal')->with('sukses', 'Jadwal berhasil digenerate otomatis tanpa bentrok.');
+    }
