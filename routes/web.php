@@ -224,6 +224,7 @@ Route::middleware(['all'])->group(function () {
     Route::controller(AbsensiController::class)->group(function () {
         //======== Menu Absensi ========//
         Route::get('/absensi/{hari_id?}', 'index')->name('absensi');
+        Route::get('/absensi-siswa/{guruPengampuId}/{hari_id}/{kelas_id}', 'absensiSiswa')->name('absensi.siswa');
         Route::post('/absensi', 'store')->name('absensi.store');
     });
 });

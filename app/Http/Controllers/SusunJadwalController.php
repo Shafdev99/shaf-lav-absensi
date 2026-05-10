@@ -39,119 +39,310 @@ class SusunJadwalController extends Controller
     }
 
     // proses susun jadwal
+
     public function prosesSusunJadwal()
     {
-        // 1. Ambil Data Master
-        $hariList = Hari::orderByRaw("CASE nama_hari WHEN 'Senin' THEN 1 WHEN 'Selasa' THEN 2 WHEN 'Rabu' THEN 3 WHEN 'Kamis' THEN 4 WHEN 'Jumat' THEN 5 WHEN 'Sabtu' THEN 6 WHEN 'Minggu' THEN 7 ELSE 8 END, nama_hari ASC")->get();
-        $kelasList = Kelas::tampilKelas()->get();
+        /*
+    |--------------------------------------------------------------------------
+    | MASTER DATA
+    |--------------------------------------------------------------------------
+    */
+
+        $hariList = Hari::whereNot('nama_hari', 'Minggu')
+            ->orderByRaw("
+            CASE nama_hari
+                WHEN 'Senin' THEN 1
+                WHEN 'Selasa' THEN 2
+                WHEN 'Rabu' THEN 3
+                WHEN 'Kamis' THEN 4
+                WHEN 'Jumat' THEN 5
+                WHEN 'Sabtu' THEN 6
+                ELSE 7
+            END
+        ")
+            ->get()
+            ->shuffle();
+
+        $kelasList = Kelas::tampilKelas()
+            ->get()
+            ->shuffle();
+
         $sesiList = SesiPelajaran::all();
-        $guruPengampuList = GuruPengampu::with(['penugasan'])->get();
 
-        // 2. Parameter Algoritma Genetika
-        $jumlahPopulasi = 20;
-        $maxGenerasi = 100;
-        $populasi = [];
+        $guruPengampuList = GuruPengampu::with([
+            'guru',
+            'mapel',
+            'penugasan'
+        ])->get();
 
-        // 3. Inisialisasi Populasi Awal
-        for ($i = 0; $i < $jumlahPopulasi; $i++) {
-            $individu = $this->generateIndividu($hariList, $sesiList, $kelasList, $guruPengampuList);
-            $populasi[] = [
-                'genes' => $individu,
-                'fitness' => $this->hitungFitness($individu)
-            ];
-        }
+        /*
+    |--------------------------------------------------------------------------
+    | RESET JADWAL
+    |--------------------------------------------------------------------------
+    */
 
-        // 4. Proses Evolusi
-        $solusiTerbaik = null;
-        for ($g = 0; $g < $maxGenerasi; $g++) {
-            // Urutkan populasi berdasarkan fitness tertinggi (bentrok paling sedikit)
-            usort($populasi, fn($a, $b) => $b['fitness'] <=> $a['fitness']);
+        SusunJadwal::query()->delete();
 
-            // Jika ditemukan fitness = 1 (Zero Conflict), ambil dan stop
-            if ($populasi[0]['fitness'] >= 1) {
-                $solusiTerbaik = $populasi[0]['genes'];
-                break;
-            }
+        /*
+    |--------------------------------------------------------------------------
+    | CACHE
+    |--------------------------------------------------------------------------
+    */
 
-            // Regenerasi: Ganti 50% populasi terburuk dengan individu baru (Mutasi/Crossover sederhana)
-            for ($p = (int)($jumlahPopulasi / 2); $p < $jumlahPopulasi; $p++) {
-                $populasi[$p]['genes'] = $this->generateIndividu($hariList, $sesiList, $kelasList, $guruPengampuList);
-                $populasi[$p]['fitness'] = $this->hitungFitness($populasi[$p]['genes']);
-            }
-        }
+        $cacheGuru = [];
+        $cacheKelas = [];
+        $cacheGuruPerHari = [];
+        $cacheGuruKelas = [];
+        $cacheKelasTotal = [];
+        $cacheGuruTotal = [];
 
-        // Jika sampai akhir tidak ketemu fitness 1, ambil yang terbaik yang ada
-        $solusiTerbaik = $solusiTerbaik ?? $populasi[0]['genes'];
+        /*
+    |--------------------------------------------------------------------------
+    | GENERATE JADWAL
+    |--------------------------------------------------------------------------
+    */
 
-        // 5. Simpan Hasil Terbaik ke Database
-        SusunJadwal::truncate(); // Hapus jadwal lama sebelum simpan yang baru
-        DB::transaction(function () use ($solusiTerbaik) {
-            foreach ($solusiTerbaik as $data) {
-                SusunJadwal::create($data);
-            }
-        });
-
-        return redirect()->route('susun.jadwal')->with('sukses', 'Jadwal berhasil digenerate dengan tingkat bentrok minimum.');
-    }
-
-    private function generateIndividu($hariList, $sesiList, $kelasList, $guruPengampuList)
-    {
-        $genes = [];
         foreach ($kelasList as $kelas) {
-            // Ambil guru yang mengajar di kelas ini
-            $pengampuKelas = $guruPengampuList->filter(function ($guru) use ($kelas) {
-                return $guru->penugasan->where('kelas_id', $kelas->id)->isNotEmpty();
-            });
 
-            // Buat pool jam mengajar sesuai kuota
-            $jamPool = [];
-            foreach ($pengampuKelas as $guru) {
-                $penugasan = $guru->penugasan->where('kelas_id', $kelas->id)->first();
-                $kuota = $penugasan->kuota_jam_per_kelas ?? 2;
-                for ($i = 0; $i < $kuota; $i++) {
-                    $jamPool[] = $guru->id;
+            /*
+        |--------------------------------------------------------------------------
+        | Ambil Guru yang Mengajar di Kelas Ini
+        |--------------------------------------------------------------------------
+        */
+
+            $pengampuKelas = $guruPengampuList
+                ->filter(function ($guruPengampu) use ($kelas) {
+
+                    return $guruPengampu
+                        ->penugasan
+                        ->where('kelas_id', $kelas->id)
+                        ->isNotEmpty();
+                })
+                ->shuffle();
+
+            foreach ($pengampuKelas as $guruPengampu) {
+
+                /*
+            |--------------------------------------------------------------------------
+            | Ambil Penugasan
+            |--------------------------------------------------------------------------
+            */
+
+                $penugasan = $guruPengampu
+                    ->penugasan
+                    ->where('kelas_id', $kelas->id)
+                    ->first();
+
+                if (!$penugasan) {
+                    continue;
                 }
-            }
-            shuffle($jamPool);
 
-            $index = 0;
-            foreach ($hariList as $hari) {
-                $sesiHari = $sesiList->where('hari_id', $hari->id);
-                foreach ($sesiHari as $sesi) {
-                    if (isset($jamPool[$index])) {
-                        $genes[] = [
+                /*
+            |--------------------------------------------------------------------------
+            | Kuota Jam Guru Per Kelas
+            |--------------------------------------------------------------------------
+            */
+
+                $targetJam =
+                    $penugasan->kuota_jam_per_kelas ?? 2;
+
+                $jamTerpasang = 0;
+
+                /*
+            |--------------------------------------------------------------------------
+            | Generate Slot
+            |--------------------------------------------------------------------------
+            */
+
+                foreach ($hariList as $hari) {
+
+                    /*
+                |--------------------------------------------------------------------------
+                | Maksimal 2 sesi per hari untuk kelas yang sama
+                |--------------------------------------------------------------------------
+                */
+
+                    $guruKelasHariCount = SusunJadwal::where(
+                        'guru_pengampu_id',
+                        $guruPengampu->id
+                    )
+                        ->where('kelas_id', $kelas->id)
+                        ->where('hari_id', $hari->id)
+                        ->count();
+
+                    if ($guruKelasHariCount >= 2) {
+                        continue;
+                    }
+
+                    /*
+                |--------------------------------------------------------------------------
+                | Ambil sesi per hari
+                |--------------------------------------------------------------------------
+                */
+
+                    $sesiHari = $sesiList
+                        ->where('hari_id', $hari->id)
+                        ->sortBy('sesi_pelajaran');
+
+                    foreach ($sesiHari as $sesi) {
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | Jika target jam terpenuhi
+                    |--------------------------------------------------------------------------
+                    */
+
+                        if ($jamTerpasang >= $targetJam) {
+                            break 2;
+                        }
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | Cek sesi berikutnya
+                    |--------------------------------------------------------------------------
+                    */
+
+                        $sesiBerikutnya = $sesiHari
+                            ->where(
+                                'sesi_pelajaran',
+                                (int)$sesi->sesi_pelajaran + 1
+                            )
+                            ->first();
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | Tentukan blok jam
+                    |--------------------------------------------------------------------------
+                    */
+
+                        $sisaJam =
+                            $targetJam - $jamTerpasang;
+
+                        $blokJam =
+                            $sisaJam >= 2 ? 2 : 1;
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | Jika butuh 2 sesi tapi sesi berikutnya tidak ada
+                    |--------------------------------------------------------------------------
+                    */
+
+                        if (
+                            $blokJam == 2 &&
+                            !$sesiBerikutnya
+                        ) {
+                            continue;
+                        }
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | CEK BENTROK SESI PERTAMA
+                    |--------------------------------------------------------------------------
+                    */
+
+                        $guruKey1 =
+                            $hari->id . '-' .
+                            $sesi->id . '-' .
+                            $guruPengampu->id;
+
+                        $kelasKey1 =
+                            $hari->id . '-' .
+                            $sesi->id . '-' .
+                            $kelas->id;
+
+                        if (
+                            isset($cacheGuru[$guruKey1]) ||
+                            isset($cacheKelas[$kelasKey1])
+                        ) {
+                            continue;
+                        }
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | CEK SESI KEDUA
+                    |--------------------------------------------------------------------------
+                    */
+
+                        if ($blokJam == 2) {
+
+                            $guruKey2 =
+                                $hari->id . '-' .
+                                $sesiBerikutnya->id . '-' .
+                                $guruPengampu->id;
+
+                            $kelasKey2 =
+                                $hari->id . '-' .
+                                $sesiBerikutnya->id . '-' .
+                                $kelas->id;
+
+                            if (
+                                isset($cacheGuru[$guruKey2]) ||
+                                isset($cacheKelas[$kelasKey2])
+                            ) {
+                                continue;
+                            }
+                        }
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | INSERT SESI PERTAMA
+                    |--------------------------------------------------------------------------
+                    */
+
+                        SusunJadwal::create([
                             'hari_id' => $hari->id,
                             'sesi_id' => $sesi->id,
                             'kelas_id' => $kelas->id,
-                            'guru_pengampu_id' => $jamPool[$index],
-                        ];
-                        $index++;
+                            'guru_pengampu_id' => $guruPengampu->id,
+                        ]);
+
+                        $cacheGuru[$guruKey1] = true;
+                        $cacheKelas[$kelasKey1] = true;
+
+                        $jamTerpasang++;
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | INSERT SESI KEDUA
+                    |--------------------------------------------------------------------------
+                    */
+
+                        if ($blokJam == 2) {
+
+                            SusunJadwal::create([
+                                'hari_id' => $hari->id,
+                                'sesi_id' => $sesiBerikutnya->id,
+                                'kelas_id' => $kelas->id,
+                                'guru_pengampu_id' => $guruPengampu->id,
+                            ]);
+
+                            $cacheGuru[$guruKey2] = true;
+                            $cacheKelas[$kelasKey2] = true;
+
+                            $jamTerpasang++;
+                        }
+
+                        /*
+                    |--------------------------------------------------------------------------
+                    | Maksimal 2 sesi per hari
+                    |--------------------------------------------------------------------------
+                    */
+
+                        break;
                     }
                 }
             }
         }
-        return $genes;
+
+        return redirect()
+            ->route('susun.jadwal')
+            ->with(
+                'sukses',
+                'Jadwal berhasil digenerate dengan blok sesi berurutan.'
+            );
     }
 
-    private function hitungFitness($genes)
-    {
-        $bentrok = 0;
-        $map = [];
 
-        foreach ($genes as $gene) {
-            // Kunci unik: Hari + Sesi + Guru
-            // Jika guru yang sama mengajar di jam yang sama di kelas berbeda, ini bentrok
-            $key = "h{$gene['hari_id']}s{$gene['sesi_id']}g{$gene['guru_pengampu_id']}";
-
-            if (isset($map[$key])) {
-                $bentrok++;
-            } else {
-                $map[$key] = true;
-            }
-        }
-
-        return 1 / (1 + $bentrok); // 1 = Sempurna, < 1 = Ada bentrok
-    }
 
 
     public function simpanGuruPengampu(Request $request)

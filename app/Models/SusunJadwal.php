@@ -27,6 +27,11 @@ class SusunJadwal extends Model
         return $this->belongsTo(Kelas::class, 'kelas_id');
     }
 
+    public function sesiPelajaran()
+    {
+        return $this->belongsTo(SesiPelajaran::class, 'sesi_id');
+    }
+
     // public function mapel()
     // {
     //     return $this->belongsTo(Mapel::class, 'mapel_id');

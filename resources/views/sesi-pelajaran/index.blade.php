@@ -522,112 +522,112 @@
             $('#deleteHari').modal('show');
         }
 
-        // const sesiRowsWrapper = document.getElementById('sesiPelajaranRows');
-        // const sesiTemplate = document.getElementById('sesiRowTemplate');
-        // let sesiIndex = 0;
+        const sesiRowsWrapper = document.getElementById('sesiPelajaranRows');
+        const sesiTemplate = document.getElementById('sesiRowTemplate');
+        let sesiIndex = 0;
 
-        // function createSesiRow(data = {}) {
-        //     const clone = sesiTemplate.content.cloneNode(true);
-        //     clone.querySelectorAll('[data-name]').forEach(element => {
-        //         const field = element.getAttribute('data-name');
-        //         element.name = `entries[${sesiIndex}][${field}]`;
-        //         if (data[field]) {
-        //             element.value = data[field];
-        //         }
-        //     });
-        //     sesiRowsWrapper.appendChild(clone);
-        //     sesiIndex++;
-        // }
+        function createSesiRow(data = {}) {
+            const clone = sesiTemplate.content.cloneNode(true);
+            clone.querySelectorAll('[data-name]').forEach(element => {
+                const field = element.getAttribute('data-name');
+                element.name = `entries[${sesiIndex}][${field}]`;
+                if (data[field]) {
+                    element.value = data[field];
+                }
+            });
+            sesiRowsWrapper.appendChild(clone);
+            sesiIndex++;
+        }
 
-        // function removeSesiRow(button) {
-        //     const row = button.closest('.sesi-row');
-        //     if (row) {
-        //         row.remove();
-        //     }
-        // }
+        function removeSesiRow(button) {
+            const row = button.closest('.sesi-row');
+            if (row) {
+                row.remove();
+            }
+        }
 
-        // document.addEventListener('DOMContentLoaded', () => {
-        //     if (sesiRowsWrapper.children.length === 0) {
-        //         createSesiRow();
-        //     }
+        document.addEventListener('DOMContentLoaded', () => {
+            if (sesiRowsWrapper.children.length === 0) {
+                createSesiRow();
+            }
 
-        //     document.getElementById('addSesiRowBtn').addEventListener('click', () => {
-        //         createSesiRow();
-        //     });
+            document.getElementById('addSesiRowBtn').addEventListener('click', () => {
+                createSesiRow();
+            });
 
-        //     const addSesiForm = document.querySelector('form[action="{{ route('sesi.pelajaran.add') }}"]');
-        //     if (!addSesiForm) {
-        //         return;
-        //     }
+            const addSesiForm = document.querySelector('form[action="{{ route('sesi.pelajaran.add') }}"]');
+            if (!addSesiForm) {
+                return;
+            }
 
-        //     addSesiForm.addEventListener('submit', function(event) {
-        //         event.preventDefault();
-        //         const formData = new FormData(this);
+            addSesiForm.addEventListener('submit', function(event) {
+                event.preventDefault();
+                const formData = new FormData(this);
 
-        //         fetch(this.action, {
-        //                 method: 'POST',
-        //                 body: formData,
-        //                 headers: {
-        //                     'X-Requested-With': 'XMLHttpRequest'
-        //                 }
-        //             })
-        //             .then(response => response.json())
-        //             .then(data => {
-        //                 if (data.success) {
-        //                     $('#AddSesiPelajaran').modal('hide');
-        //                     toastr.success(data.message || 'Sesi pelajaran berhasil disimpan.');
-        //                     this.reset();
-        //                     sesiRowsWrapper.innerHTML = '';
-        //                     sesiIndex = 0;
-        //                     createSesiRow();
-        //                 } else if (data.errors) {
-        //                     Object.values(data.errors).flat().forEach(msg => toastr.warning(msg));
-        //                 } else {
-        //                     toastr.warning('Terjadi kesalahan saat menyimpan data.');
-        //                 }
-        //                 setTimeout(() => location.reload(), 5000);
-        //             })
-        //             .catch(() => {
-        //                 toastr.error('Gagal mengirim data ke server.');
-        //             });
-        //     });
+                fetch(this.action, {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            $('#AddSesiPelajaran').modal('hide');
+                            toastr.success(data.message || 'Sesi pelajaran berhasil disimpan.');
+                            this.reset();
+                            sesiRowsWrapper.innerHTML = '';
+                            sesiIndex = 0;
+                            createSesiRow();
+                        } else if (data.errors) {
+                            Object.values(data.errors).flat().forEach(msg => toastr.warning(msg));
+                        } else {
+                            toastr.warning('Terjadi kesalahan saat menyimpan data.');
+                        }
+                        setTimeout(() => location.reload(), 5000);
+                    })
+                    .catch(() => {
+                        toastr.error('Gagal mengirim data ke server.');
+                    });
+            });
 
-        //     $('#AddSesiPelajaran').on('show.bs.modal', () => {
-        //         if (sesiRowsWrapper.children.length === 0) {
-        //             createSesiRow();
-        //         }
-        //     });
-        // });
+            $('#AddSesiPelajaran').on('show.bs.modal', () => {
+                if (sesiRowsWrapper.children.length === 0) {
+                    createSesiRow();
+                }
+            });
+        });
 
-        // function appendSesiRowsToTable(rows) {
-        //     const table = document.querySelector('.desktop-table');
-        //     if (!table || !rows.length) {
-        //         return;
-        //     }
+        function appendSesiRowsToTable(rows) {
+            const table = document.querySelector('.desktop-table');
+            if (!table || !rows.length) {
+                return;
+            }
 
-        //     const emptyRow = table.querySelector('tr td[colspan="4"]');
-        //     if (emptyRow) {
-        //         emptyRow.closest('tr').remove();
-        //     }
+            const emptyRow = table.querySelector('tr td[colspan="4"]');
+            if (emptyRow) {
+                emptyRow.closest('tr').remove();
+            }
 
-        //     rows.forEach(row => {
-        //         const tr = document.createElement('tr');
-        //         tr.innerHTML = `
-    //                             <td>${row.sesi_pelajaran}</td>
-    //                             <td>${row.jam_mulai}</td>
-    //                             <td>${row.jam_selesai}</td>
-    //                             <td>${row.zona_waktu}</td>
-    //                         `;
-        //         table.appendChild(tr);
-        //     });
-        // }
+            rows.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                                <td>${row.sesi_pelajaran}</td>
+                                <td>${row.jam_mulai}</td>
+                                <td>${row.jam_selesai}</td>
+                                <td>${row.zona_waktu}</td>
+                            `;
+                table.appendChild(tr);
+            });
+        }
 
         // buat fungsi untuk mengelola checkbox "Semua Hari"
-        // document.getElementById('hariCheckboxAll').addEventListener('change', function() {
-        //     const isChecked = this.checked;
-        //     document.querySelectorAll('.hari-checkbox').forEach(checkbox => {
-        //         checkbox.checked = isChecked;
-        //     });
-        // });
+        document.getElementById('hariCheckboxAll').addEventListener('change', function() {
+            const isChecked = this.checked;
+            document.querySelectorAll('.hari-checkbox').forEach(checkbox => {
+                checkbox.checked = isChecked;
+            });
+        });
     </script>
 @endpush
